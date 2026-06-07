@@ -42,10 +42,7 @@ wandb/
 *.pt
 *.pth
 
-# Local datasets. See README for expected layout.
-dataset/**
-!dataset/
-!dataset/README.md
+# Datasets are allowed to be versioned when their licenses permit redistribution.
 
 # Local manuscripts and private notes
 *.docx

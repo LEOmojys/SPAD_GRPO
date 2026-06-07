@@ -1,0 +1,16 @@
+{
+  "source_root": "E:\\pyproject\\data",
+  "output_root": "dataset",
+  "format": "JSONL with question, answer, raw_answer, gold, source, source_id, dataset_type",
+  "notes": [
+    "answer uses GSM8K-compatible '#### final' suffix.",
+    "BBH is marked eval_only and should not be used for training.",
+    "AGIEval sat_math expects the model to answer with the option letter."
+  ],
+  "counts": {
+    "math/math.jsonl": 5000,
+    "agieval/math.jsonl": 1000,
+    "agieval/sat_math.jsonl": 220,
+    "bbh/multistep_arithmetic_two.jsonl": 250
+  }
+}
