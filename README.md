@@ -240,6 +240,9 @@ Format and efficiency:
 - `sampled_answer_extraction_rate@8`
 - `greedy_format_accuracy`
 - `sampled_format_accuracy@8`
+- `tokens@1`: arithmetic mean completion token count under greedy decoding.
+- `tokens@8`: arithmetic mean completion token count over the same 8 sampled
+  completions used by `avg@8`.
 - `greedy_avg_tokens`
 - `sampled_avg@8_tokens`
 - `greedy_truncation_rate`

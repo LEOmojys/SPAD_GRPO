@@ -928,8 +928,8 @@ def quick_eval(
                         "avg@1": f"{avg1_correct / eval_idx:.3f}",
                         f"avg@{avg_k}": f"{avgk_correct / max(eval_idx * avg_k, 1):.3f}",
                         f"maj@{avg_k}": f"{majority_correct / eval_idx:.3f}",
-                        "greedy_tok": f"{float(np.mean(greedy_token_counts)):.1f}",
-                        "sample_tok": f"{float(np.mean(sampled_token_counts)):.1f}" if sampled_token_counts else "0.0",
+                        "tok@1": f"{float(np.mean(greedy_token_counts)):.1f}",
+                        f"tok@{avg_k}": f"{float(np.mean(sampled_token_counts)):.1f}" if sampled_token_counts else "0.0",
                         "gens": eval_idx * (avg_k + 1),
                     }
                 )
@@ -937,6 +937,8 @@ def quick_eval(
         if details_file is not None:
             details_file.close()
     model.train()
+    tokens_at_1 = float(np.mean(greedy_token_counts)) if greedy_token_counts else 0.0
+    tokens_at_k = float(np.mean(sampled_token_counts)) if sampled_token_counts else 0.0
     result = {
         "eval_n": n,
         "avg@1": avg1_correct / max(n, 1),
@@ -954,8 +956,10 @@ def quick_eval(
         "avg_k": avg_k,
         "sample_temperature": cfg.eval_sample_temperature,
         "sample_top_p": cfg.eval_sample_top_p,
-        "greedy_avg_tokens": float(np.mean(greedy_token_counts)) if greedy_token_counts else 0.0,
-        f"sampled_avg@{avg_k}_tokens": float(np.mean(sampled_token_counts)) if sampled_token_counts else 0.0,
+        "tokens@1": tokens_at_1,
+        f"tokens@{avg_k}": tokens_at_k,
+        "greedy_avg_tokens": tokens_at_1,
+        f"sampled_avg@{avg_k}_tokens": tokens_at_k,
         "greedy_answer_extraction_rate": greedy_extracted / max(n, 1),
         f"sampled_answer_extraction_rate@{avg_k}": sampled_extracted / max(n * avg_k, 1),
         "greedy_format_accuracy": greedy_format_correct / max(n, 1),
@@ -976,6 +980,8 @@ def quick_eval(
             f"majority@{avg_k}_ci95": wilson_interval(bucket["majority_correct"], bucket["n"]),
             f"majority_agreement@{avg_k}": float(np.mean(bucket["majority_agreement_scores"])) if bucket["majority_agreement_scores"] else 0.0,
             f"unique_answers@{avg_k}": float(np.mean(bucket["unique_answer_counts"])) if bucket["unique_answer_counts"] else 0.0,
+            "tokens@1": float(np.mean(bucket["greedy_tokens"])) if bucket["greedy_tokens"] else 0.0,
+            f"tokens@{avg_k}": float(np.mean(bucket["sampled_tokens"])) if bucket["sampled_tokens"] else 0.0,
             "greedy_avg_tokens": float(np.mean(bucket["greedy_tokens"])) if bucket["greedy_tokens"] else 0.0,
             f"sampled_avg@{avg_k}_tokens": float(np.mean(bucket["sampled_tokens"])) if bucket["sampled_tokens"] else 0.0,
             "greedy_answer_extraction_rate": bucket["greedy_extracted"] / max(bucket["n"], 1),
