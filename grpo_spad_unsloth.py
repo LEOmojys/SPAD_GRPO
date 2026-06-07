@@ -334,23 +334,28 @@ def train_unsloth(
     trainer.train()
     trainer.save_model(Path(output_dir) / f"{mode}_checkpoint_final")
 
-    eval_result = quick_eval(
-        trainer.model,
-        tokenizer,
-        eval_samples,
-        cfg,
-        cfg.eval_episodes,
-        Path(output_dir) / f"eval_details_{mode}_unsloth.jsonl",
-    )
+    eval_result = None
+    if not getattr(cfg, "skip_final_eval", False):
+        eval_result = quick_eval(
+            trainer.model,
+            tokenizer,
+            eval_samples,
+            cfg,
+            cfg.eval_episodes,
+            Path(output_dir) / f"eval_details_{mode}_unsloth.jsonl",
+        )
     metrics = {
         "mode": mode,
         "backend": "unsloth",
-        "final_eval": [eval_result],
+        "final_eval": [] if eval_result is None else [eval_result],
         "trainer_log_history": trainer.state.log_history,
     }
     with open(Path(output_dir) / f"metrics_{mode}_unsloth.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
-    print(f"[EVAL] {eval_result}")
+    if eval_result is not None:
+        print(f"[EVAL] {eval_result}")
+    else:
+        print("[EVAL] skipped final eval; run --eval-only for formal metrics.")
     print(f"[DONE] saved to {output_dir}")
 
 
@@ -432,12 +437,21 @@ def main():
     precision_group.add_argument("--fp16", action="store_true", help="Override config dtype and run float16 mixed precision.")
     parser.add_argument("--eval-episodes", type=int, default=None, help="Override logging.eval_episodes for eval-only smoke/full eval.")
     parser.add_argument("--eval-pass-at-k", type=int, default=None, help="Override logging.eval_pass_at_k for eval-only smoke/full eval.")
+    parser.add_argument("--eval-batch-size", type=int, default=None, help="Override logging.eval_batch_size for batched evaluation generation.")
     parser.add_argument("--max-completion-length", type=int, default=None, help="Override model.max_completion_length.")
     parser.add_argument("--num-generations", type=int, default=None, help="Override training.num_generations.")
     parser.add_argument("--per-device-train-batch-size", type=int, default=None, help="Override training.per_device_train_batch_size.")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=None, help="Override training.gradient_accumulation_steps.")
     parser.add_argument("--grpo-steps", type=int, default=None, help="Override training.grpo_steps.")
+    parser.add_argument("--logging-steps", type=int, default=None, help="Override logging.logging_steps.")
+    parser.add_argument("--save-steps", type=int, default=None, help="Override logging.save_steps. Use 0 to disable intermediate checkpoints.")
     parser.add_argument("--lora-dropout", type=float, default=None, help="Override lora.dropout. Use 0 for Unsloth fast LoRA patching.")
+    parser.add_argument("--skip-final-eval", action="store_true", help="Skip automatic evaluation after training.")
+    parser.add_argument(
+        "--no-process-metrics",
+        action="store_true",
+        help="Skip heuristic process metric logging during baseline training. SPAD/C-SPAD still compute process signals.",
+    )
     args = parser.parse_args()
 
     if args.bf16:
@@ -458,6 +472,8 @@ def main():
         cfg.eval_episodes = args.eval_episodes
     if args.eval_pass_at_k is not None:
         cfg.eval_pass_at_k = args.eval_pass_at_k
+    if args.eval_batch_size is not None:
+        cfg.eval_batch_size = args.eval_batch_size
     if args.max_completion_length is not None:
         cfg.max_completion_length = args.max_completion_length
     if args.num_generations is not None:
@@ -468,8 +484,16 @@ def main():
         cfg.grad_accum_steps = args.gradient_accumulation_steps
     if args.grpo_steps is not None:
         cfg.grpo_steps = args.grpo_steps
+    if args.logging_steps is not None:
+        cfg.log_steps = args.logging_steps
+    if args.save_steps is not None:
+        cfg.save_steps = args.save_steps
     if args.lora_dropout is not None:
         cfg.lora_dropout = args.lora_dropout
+    if args.skip_final_eval:
+        cfg.skip_final_eval = True
+    if args.no_process_metrics:
+        cfg.log_process_metrics = False
 
     if args.eval_only:
         eval_unsloth_checkpoint(

@@ -32,7 +32,8 @@ configs/eval/
 Use active configs for shorter TRL experiments. Use formal configs for final
 RL-only GSM8K training runs. Use compare configs for frontier GRPO ablations:
 Dr.GRPO, DAPO-lite, and GTPO-lite. Archive configs preserve older hand-written
-and ablation settings.
+and ablation settings; they are not part of the current reproducible experiment
+suite and may reference legacy local files.
 
 Use eval configs for fair cross-dataset checkpoint evaluation. They use
 deterministic generation, longer evaluation context/completion budgets, and

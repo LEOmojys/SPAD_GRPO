@@ -23,9 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import yaml
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from process_signals import (
     MathSample,
@@ -115,8 +113,11 @@ class SPADConfig:
 
     eval_episodes: int = 50
     eval_pass_at_k: int = 8
+    eval_batch_size: int = 1
     eval_sample_temperature: float = 1.0
     eval_sample_top_p: float = 0.9
+    skip_final_eval: bool = False
+    log_process_metrics: bool = True
     log_steps: int = 10
     save_steps: int = 100
     output_dir: str = "./outputs_spad"
@@ -240,8 +241,11 @@ def load_config(path: str) -> SPADConfig:
     log = raw.get("logging", {})
     cfg.eval_episodes = log.get("eval_episodes", cfg.eval_episodes)
     cfg.eval_pass_at_k = log.get("eval_pass_at_k", cfg.eval_pass_at_k)
+    cfg.eval_batch_size = log.get("eval_batch_size", cfg.eval_batch_size)
     cfg.eval_sample_temperature = log.get("eval_sample_temperature", cfg.eval_sample_temperature)
     cfg.eval_sample_top_p = log.get("eval_sample_top_p", cfg.eval_sample_top_p)
+    cfg.skip_final_eval = log.get("skip_final_eval", cfg.skip_final_eval)
+    cfg.log_process_metrics = log.get("log_process_metrics", cfg.log_process_metrics)
     cfg.log_steps = log.get("logging_steps", cfg.log_steps)
     cfg.save_steps = log.get("save_steps", cfg.save_steps)
     cfg.output_dir = log.get("output_dir", cfg.output_dir)
@@ -256,6 +260,9 @@ def autocast_context():
 
 
 def load_model(cfg: SPADConfig):
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
     torch_dtype = torch_dtype_from_name(cfg.dtype)
     set_autocast_dtype(cfg.dtype)
     kwargs: Dict[str, Any] = {
@@ -636,7 +643,7 @@ def _decode_completion(model, tokenizer, prompt_ids: torch.Tensor, cfg: SPADConf
         )
     else:
         generation_kwargs.update({"do_sample": False})
-    with torch.no_grad():
+    with torch.inference_mode():
         with autocast_context():
             output = model.generate(prompt_ids, **generation_kwargs)
     completion_ids = output[0, prompt_ids.shape[1]:]
@@ -665,7 +672,7 @@ def _decode_sampled_completions(
         "pad_token_id": tokenizer.pad_token_id,
         "eos_token_id": tokenizer.eos_token_id,
     }
-    with torch.no_grad():
+    with torch.inference_mode():
         with autocast_context():
             output = model.generate(prompt_ids, **generation_kwargs)
     decoded = []
@@ -679,6 +686,67 @@ def _decode_sampled_completions(
             }
         )
     return decoded
+
+
+def _decode_batch_outputs(
+    model,
+    tokenizer,
+    prompts: List[str],
+    cfg: SPADConfig,
+    *,
+    sample: bool,
+    num_return_sequences: int = 1,
+) -> List[List[Dict[str, Any]]]:
+    if not prompts:
+        return []
+    generation_kwargs: Dict[str, Any] = {
+        "max_new_tokens": cfg.max_completion_length,
+        "pad_token_id": tokenizer.pad_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+    }
+    if sample:
+        generation_kwargs.update(
+            {
+                "do_sample": True,
+                "temperature": cfg.eval_sample_temperature,
+                "top_p": cfg.eval_sample_top_p,
+                "num_return_sequences": num_return_sequences,
+            }
+        )
+    else:
+        generation_kwargs.update({"do_sample": False})
+
+    old_padding_side = getattr(tokenizer, "padding_side", "right")
+    tokenizer.padding_side = "left"
+    try:
+        inputs = tokenizer(
+            text=prompts,
+            return_tensors="pt",
+            truncation=True,
+            max_length=cfg.max_seq_length,
+            padding=True,
+            add_special_tokens=False,
+        )
+    finally:
+        tokenizer.padding_side = old_padding_side
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    input_width = inputs["input_ids"].shape[1]
+    with torch.inference_mode():
+        with autocast_context():
+            output = model.generate(**inputs, **generation_kwargs)
+
+    grouped: List[List[Dict[str, Any]]] = [[] for _ in prompts]
+    for output_idx, row in enumerate(output):
+        prompt_idx = output_idx // num_return_sequences if sample else output_idx
+        completion_ids = row[input_width:]
+        grouped[prompt_idx].append(
+            {
+                "completion": tokenizer.decode(completion_ids, skip_special_tokens=True).strip(),
+                "generated_tokens": int(completion_ids.numel()),
+                "truncated": bool(completion_ids.numel() >= cfg.max_completion_length),
+            }
+        )
+    return grouped
 
 
 def quick_eval(
@@ -708,142 +776,166 @@ def quick_eval(
     unique_answer_counts: List[int] = []
     metric_sums: Dict[str, float] = {}
     by_type: Dict[str, Dict[str, Any]] = {}
-    details = []
     avg_k = max(1, int(cfg.eval_pass_at_k))
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
+    details_file = None
+    if details_path is not None:
+        details_path = Path(details_path)
+        details_path.parent.mkdir(parents=True, exist_ok=True)
+        details_file = open(details_path, "w", encoding="utf-8")
+    selected_samples = eval_samples[:n]
+    eval_batch_size = max(1, int(getattr(cfg, "eval_batch_size", 1)))
     eval_iter = tqdm(
-        eval_samples[:n],
-        total=n,
+        range(0, n, eval_batch_size),
+        total=math.ceil(n / eval_batch_size) if n else 0,
         desc=f"[EVAL avg@1/avg@{avg_k}]",
         dynamic_ncols=True,
     )
-    for eval_idx, sample in enumerate(eval_iter, start=1):
-        prompt = format_prompt(tokenizer, sample.question, sample.dataset_type)
-        prompt_ids = tokenizer(text=prompt, return_tensors="pt", truncation=True, max_length=cfg.max_seq_length).input_ids.to(model.device)
-        greedy_output = _decode_completion(model, tokenizer, prompt_ids, cfg, sample=False)
-        completion = greedy_output["completion"]
-        final_answer = extract_final_answer(completion)
-        is_correct = int(verify_answer(final_answer, sample.answer, dataset_type=sample.dataset_type))
-        avg1_correct += is_correct
-        greedy_extracted += int(bool(final_answer))
-        greedy_format_correct += int(has_final_answer_format(completion))
-        greedy_truncated += int(greedy_output["truncated"])
-        token_count = int(greedy_output["generated_tokens"])
-        greedy_token_counts.append(token_count)
-        analysis = analyze_process(sample.question, completion, sample.answer, sample.dataset_type)
-        sampled = []
-        sample_answers = []
-        sample_correct_count = 0
-        sample_outputs = _decode_sampled_completions(model, tokenizer, prompt_ids, cfg, avg_k)
-        for sample_idx, sample_output in enumerate(sample_outputs):
-            sample_completion = sample_output["completion"]
-            sample_answer = extract_final_answer(sample_completion)
-            sample_is_correct = verify_answer(sample_answer, sample.answer, dataset_type=sample.dataset_type)
-            sample_tokens = int(sample_output["generated_tokens"])
-            sample_correct_count += int(sample_is_correct)
-            sample_answers.append(sample_answer)
-            sampled_extracted += int(bool(sample_answer))
-            sampled_format_correct += int(has_final_answer_format(sample_completion))
-            sampled_truncated += int(sample_output["truncated"])
-            sampled_token_counts.append(sample_tokens)
-            sampled.append(
-                {
-                    "sample_index": sample_idx,
-                    "correct": bool(sample_is_correct),
-                    "extracted_answer": sample_answer,
-                    "token_count": sample_tokens,
-                    "format_ok": has_final_answer_format(sample_completion),
-                    "truncated": bool(sample_output["truncated"]),
-                    "completion": sample_completion,
-                }
+    eval_idx = 0
+    try:
+        for batch_start in eval_iter:
+            batch_samples = selected_samples[batch_start : batch_start + eval_batch_size]
+            batch_prompts = [format_prompt(tokenizer, sample.question, sample.dataset_type) for sample in batch_samples]
+            greedy_outputs = _decode_batch_outputs(model, tokenizer, batch_prompts, cfg, sample=False, num_return_sequences=1)
+            sampled_outputs = _decode_batch_outputs(
+                model,
+                tokenizer,
+                batch_prompts,
+                cfg,
+                sample=True,
+                num_return_sequences=avg_k,
             )
-        avgk_correct += sample_correct_count
-        avgk_score = sample_correct_count / max(avg_k, 1)
-        avgk_question_scores.append(avgk_score)
-        majority, majority_count, unique_answers, majority_agreement = majority_answer(sample_answers)
-        majority_is_correct = int(bool(majority) and verify_answer(majority, sample.answer, dataset_type=sample.dataset_type))
-        majority_correct += majority_is_correct
-        majority_question_scores.append(float(majority_is_correct))
-        majority_agreement_scores.append(float(majority_agreement))
-        unique_answer_counts.append(unique_answers)
-        bucket = by_type.setdefault(
-            sample.dataset_type,
-            {
-                "n": 0,
-                "avg1_correct": 0,
-                "avgk_correct": 0,
-                "majority_correct": 0,
-                "avgk_scores": [],
-                "majority_scores": [],
-                "majority_agreement_scores": [],
-                "unique_answer_counts": [],
-                "greedy_tokens": [],
-                "sampled_tokens": [],
-                "greedy_format_correct": 0,
-                "sampled_format_correct": 0,
-                "greedy_extracted": 0,
-                "sampled_extracted": 0,
-                "greedy_truncated": 0,
-                "sampled_truncated": 0,
-                "metrics": {},
-            },
-        )
-        bucket["n"] += 1
-        bucket["avg1_correct"] += is_correct
-        bucket["avgk_correct"] += sample_correct_count
-        bucket["majority_correct"] += majority_is_correct
-        bucket["avgk_scores"].append(avgk_score)
-        bucket["majority_scores"].append(float(majority_is_correct))
-        bucket["majority_agreement_scores"].append(float(majority_agreement))
-        bucket["unique_answer_counts"].append(unique_answers)
-        bucket["greedy_tokens"].append(token_count)
-        bucket["sampled_tokens"].extend([row["token_count"] for row in sampled])
-        bucket["greedy_format_correct"] += int(has_final_answer_format(completion))
-        bucket["sampled_format_correct"] += sum(int(row["format_ok"]) for row in sampled)
-        bucket["greedy_extracted"] += int(bool(final_answer))
-        bucket["sampled_extracted"] += sum(int(bool(row["extracted_answer"])) for row in sampled)
-        bucket["greedy_truncated"] += int(greedy_output["truncated"])
-        bucket["sampled_truncated"] += sum(int(row["truncated"]) for row in sampled)
-        for k, v in process_metrics_dict(analysis).items():
-            metric_sums[k] = metric_sums.get(k, 0.0) + v
-            bucket["metrics"][k] = bucket["metrics"].get(k, 0.0) + v
-        details.append(
-            {
-                "source": sample.source,
-                "source_id": sample.source_id,
-                "dataset_type": sample.dataset_type,
-                "question": sample.question,
-                "gold_answer": sample.answer,
-                "avg1_correct": bool(is_correct),
-                "avgk_correct_count": sample_correct_count,
-                "avgk_score": avgk_score,
-                "avg_k": avg_k,
-                "greedy_extracted_answer": final_answer,
-                "greedy_completion": completion,
-                "greedy_token_count": token_count,
-                "greedy_format_ok": has_final_answer_format(completion),
-                "greedy_truncated": bool(greedy_output["truncated"]),
-                "majority_answer": majority,
-                "majority_count": majority_count,
-                "majority_correct": bool(majority_is_correct),
-                "majority_agreement": majority_agreement,
-                "unique_answer_count": unique_answers,
-                "samples": sampled,
-                "process_metrics": process_metrics_dict(analysis),
-            }
-        )
-        eval_iter.set_postfix(
-            {
-                "avg@1": f"{avg1_correct / eval_idx:.3f}",
-                f"avg@{avg_k}": f"{avgk_correct / max(eval_idx * avg_k, 1):.3f}",
-                f"maj@{avg_k}": f"{majority_correct / eval_idx:.3f}",
-                "greedy_tok": f"{float(np.mean(greedy_token_counts)):.1f}",
-                "sample_tok": f"{float(np.mean(sampled_token_counts)):.1f}" if sampled_token_counts else "0.0",
-                "gens": eval_idx * (avg_k + 1),
-            }
-        )
+            for sample, greedy_group, sample_outputs in zip(batch_samples, greedy_outputs, sampled_outputs):
+                eval_idx += 1
+                greedy_output = greedy_group[0]
+                completion = greedy_output["completion"]
+                final_answer = extract_final_answer(completion)
+                is_correct = int(verify_answer(final_answer, sample.answer, dataset_type=sample.dataset_type))
+                avg1_correct += is_correct
+                greedy_extracted += int(bool(final_answer))
+                greedy_format_ok = has_final_answer_format(completion)
+                greedy_format_correct += int(greedy_format_ok)
+                greedy_truncated += int(greedy_output["truncated"])
+                token_count = int(greedy_output["generated_tokens"])
+                greedy_token_counts.append(token_count)
+                analysis = analyze_process(sample.question, completion, sample.answer, sample.dataset_type)
+                sampled = []
+                sample_answers = []
+                sample_correct_count = 0
+                for sample_idx, sample_output in enumerate(sample_outputs):
+                    sample_completion = sample_output["completion"]
+                    sample_answer = extract_final_answer(sample_completion)
+                    sample_is_correct = verify_answer(sample_answer, sample.answer, dataset_type=sample.dataset_type)
+                    sample_tokens = int(sample_output["generated_tokens"])
+                    sample_correct_count += int(sample_is_correct)
+                    sample_answers.append(sample_answer)
+                    sampled_extracted += int(bool(sample_answer))
+                    format_ok = has_final_answer_format(sample_completion)
+                    sampled_format_correct += int(format_ok)
+                    sampled_truncated += int(sample_output["truncated"])
+                    sampled_token_counts.append(sample_tokens)
+                    sampled.append(
+                        {
+                            "sample_index": sample_idx,
+                            "correct": bool(sample_is_correct),
+                            "extracted_answer": sample_answer,
+                            "token_count": sample_tokens,
+                            "format_ok": format_ok,
+                            "truncated": bool(sample_output["truncated"]),
+                            "completion": sample_completion,
+                        }
+                    )
+                avgk_correct += sample_correct_count
+                avgk_score = sample_correct_count / max(avg_k, 1)
+                avgk_question_scores.append(avgk_score)
+                majority, majority_count, unique_answers, majority_agreement = majority_answer(sample_answers)
+                majority_is_correct = int(bool(majority) and verify_answer(majority, sample.answer, dataset_type=sample.dataset_type))
+                majority_correct += majority_is_correct
+                majority_question_scores.append(float(majority_is_correct))
+                majority_agreement_scores.append(float(majority_agreement))
+                unique_answer_counts.append(unique_answers)
+                bucket = by_type.setdefault(
+                    sample.dataset_type,
+                    {
+                        "n": 0,
+                        "avg1_correct": 0,
+                        "avgk_correct": 0,
+                        "majority_correct": 0,
+                        "avgk_scores": [],
+                        "majority_scores": [],
+                        "majority_agreement_scores": [],
+                        "unique_answer_counts": [],
+                        "greedy_tokens": [],
+                        "sampled_tokens": [],
+                        "greedy_format_correct": 0,
+                        "sampled_format_correct": 0,
+                        "greedy_extracted": 0,
+                        "sampled_extracted": 0,
+                        "greedy_truncated": 0,
+                        "sampled_truncated": 0,
+                        "metrics": {},
+                    },
+                )
+                bucket["n"] += 1
+                bucket["avg1_correct"] += is_correct
+                bucket["avgk_correct"] += sample_correct_count
+                bucket["majority_correct"] += majority_is_correct
+                bucket["avgk_scores"].append(avgk_score)
+                bucket["majority_scores"].append(float(majority_is_correct))
+                bucket["majority_agreement_scores"].append(float(majority_agreement))
+                bucket["unique_answer_counts"].append(unique_answers)
+                bucket["greedy_tokens"].append(token_count)
+                bucket["sampled_tokens"].extend([row["token_count"] for row in sampled])
+                bucket["greedy_format_correct"] += int(greedy_format_ok)
+                bucket["sampled_format_correct"] += sum(int(row["format_ok"]) for row in sampled)
+                bucket["greedy_extracted"] += int(bool(final_answer))
+                bucket["sampled_extracted"] += sum(int(bool(row["extracted_answer"])) for row in sampled)
+                bucket["greedy_truncated"] += int(greedy_output["truncated"])
+                bucket["sampled_truncated"] += sum(int(row["truncated"]) for row in sampled)
+                process_metrics = process_metrics_dict(analysis)
+                for k, v in process_metrics.items():
+                    metric_sums[k] = metric_sums.get(k, 0.0) + v
+                    bucket["metrics"][k] = bucket["metrics"].get(k, 0.0) + v
+                if details_file is not None:
+                    details_row = {
+                        "source": sample.source,
+                        "source_id": sample.source_id,
+                        "dataset_type": sample.dataset_type,
+                        "question": sample.question,
+                        "gold_answer": sample.answer,
+                        "avg1_correct": bool(is_correct),
+                        "avgk_correct_count": sample_correct_count,
+                        "avgk_score": avgk_score,
+                        "avg_k": avg_k,
+                        "greedy_extracted_answer": final_answer,
+                        "greedy_completion": completion,
+                        "greedy_token_count": token_count,
+                        "greedy_format_ok": greedy_format_ok,
+                        "greedy_truncated": bool(greedy_output["truncated"]),
+                        "majority_answer": majority,
+                        "majority_count": majority_count,
+                        "majority_correct": bool(majority_is_correct),
+                        "majority_agreement": majority_agreement,
+                        "unique_answer_count": unique_answers,
+                        "samples": sampled,
+                        "process_metrics": process_metrics,
+                    }
+                    details_file.write(json.dumps(details_row, ensure_ascii=False) + "\n")
+                eval_iter.set_postfix(
+                    {
+                        "avg@1": f"{avg1_correct / eval_idx:.3f}",
+                        f"avg@{avg_k}": f"{avgk_correct / max(eval_idx * avg_k, 1):.3f}",
+                        f"maj@{avg_k}": f"{majority_correct / eval_idx:.3f}",
+                        "greedy_tok": f"{float(np.mean(greedy_token_counts)):.1f}",
+                        "sample_tok": f"{float(np.mean(sampled_token_counts)):.1f}" if sampled_token_counts else "0.0",
+                        "gens": eval_idx * (avg_k + 1),
+                    }
+                )
+    finally:
+        if details_file is not None:
+            details_file.close()
     model.train()
     result = {
         "eval_n": n,
@@ -897,11 +989,6 @@ def quick_eval(
         for dtype, bucket in by_type.items()
     }
     if details_path is not None:
-        details_path = Path(details_path)
-        details_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(details_path, "w", encoding="utf-8") as f:
-            for row in details:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         result["details_path"] = str(details_path)
     return result
 

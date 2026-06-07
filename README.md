@@ -21,11 +21,12 @@ documentation only. Large local artifacts are intentionally excluded:
 
 - model weights under `Models/`
 - generated checkpoints and metrics under `results/`
-- local datasets under `dataset/`
 - virtual environments and package caches
 - private manuscript files
 
-Use the layout below to place those files locally when running experiments.
+The lightweight JSONL datasets under `dataset/` are versioned in this project
+when their licenses permit redistribution. Use the layout below to place model
+weights and generated outputs locally when running experiments.
 
 ## Project Layout
 
@@ -102,7 +103,8 @@ q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
 
 ## Dataset Setup
 
-Datasets are not committed by default. Expected local layout:
+The repository includes the aligned JSONL datasets used by the current
+experiments:
 
 ```text
 dataset/
@@ -284,4 +286,3 @@ ablations inspired by those methods.
 
 No license has been selected yet. Add a license before publishing if you want
 others to use or redistribute the code.
-"# SPAD_GRPO" 

@@ -258,11 +258,12 @@ class SPADGRPOTrainer(GRPOTrainer):
         active_token_count = completion_mask.sum().to(torch.float32)
         num_items_in_batch = gather(active_token_count).sum().clamp(min=1.0)
 
-        self._logs["prompt"].extend(gather_object(prompts_text))
-        self._logs["completion"].extend(gather_object(completions_text))
-        for i, name in enumerate(self.reward_func_names):
-            self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
-        self._logs["advantages"].extend(all_process_advantages.tolist())
+        if self.log_completions:
+            self._logs["prompt"].extend(gather_object(prompts_text))
+            self._logs["completion"].extend(gather_object(completions_text))
+            for i, name in enumerate(self.reward_func_names):
+                self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
+            self._logs["advantages"].extend(all_process_advantages.tolist())
 
         output = {
             "prompt_ids": prompt_ids,
@@ -408,6 +409,9 @@ class SPADGRPOTrainer(GRPOTrainer):
         )
 
     def _local_process_adjustments(self, inputs, completions_text: List[str]):
+        if self.spad_mode == "baseline":
+            return torch.zeros(len(completions_text), dtype=torch.float32), [[] for _ in completions_text]
+
         adjustments = []
         score_rows = []
         metric_sums: Dict[str, float] = {}
@@ -478,16 +482,17 @@ class SPADGRPOTrainer(GRPOTrainer):
         max_len: int,
         device,
     ) -> torch.Tensor:
+        if self.spad_mode == "baseline":
+            seq = torch.tensor(sequence_advantages, dtype=torch.float32, device=device).unsqueeze(1)
+            return seq.expand(len(sequence_advantages), max_len)
+
         rows = []
         for completion, token_ids, adv, scores in zip(
             completions_text, completion_ids_list, sequence_advantages, process_scores
         ):
-            if self.spad_mode == "baseline":
-                token_advs = [float(adv)] * len(token_ids)
-            else:
-                step_advs = decompose_advantage(float(adv), scores, self.spad_cfg)
-                token_advs = self._expand_step_advantages(completion, step_advs, len(token_ids))
-                token_advs = self._normalize_token_advantages(token_advs, float(adv))
+            step_advs = decompose_advantage(float(adv), scores, self.spad_cfg)
+            token_advs = self._expand_step_advantages(completion, step_advs, len(token_ids))
+            token_advs = self._normalize_token_advantages(token_advs, float(adv))
             if len(token_advs) < max_len:
                 token_advs.extend([0.0] * (max_len - len(token_advs)))
             rows.append(token_advs[:max_len])
@@ -529,12 +534,13 @@ class SPADGRPOTrainer(GRPOTrainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)
 
+        needs_entropy = self.top_entropy_quantile < 1.0 or self.spad_cfg.entropy_advantage_weighting
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
             logits_to_keep,
-            compute_entropy=True,
+            compute_entropy=needs_entropy,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
             num_images=inputs.get("num_images"),
@@ -630,8 +636,11 @@ class SPADGRPOTrainer(GRPOTrainer):
             mean_kl = masked_batch_mean(per_token_kl)
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
-        mean_entropy = masked_batch_mean(entropies)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        if entropies is not None:
+            mean_entropy = masked_batch_mean(entropies)
+            self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        else:
+            self._metrics[mode]["entropy"].append(0.0)
 
         sign_tensor = advantage_tensor if advantage_tensor.shape == coef_1.shape else advantage_tensor.expand_as(coef_1)
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (sign_tensor < 0)
@@ -716,8 +725,8 @@ def make_trl_config(
         mask_truncated_completions=cfg.mask_truncated_completions,
         top_entropy_quantile=cfg.top_entropy_quantile,
         logging_steps=cfg.log_steps,
-        save_strategy="steps",
-        save_steps=cfg.save_steps,
+        save_strategy="no" if cfg.save_steps <= 0 else "steps",
+        save_steps=max(1, cfg.save_steps),
         report_to=[],
         bf16=cfg.dtype == "bfloat16",
         fp16=cfg.dtype == "float16",
@@ -768,22 +777,27 @@ def train_trl(cfg: SPADConfig, mode: str, output_dir: Optional[str] = None):
     trainer.train()
     trainer.save_model(Path(output_dir) / f"{mode}_checkpoint_final")
 
-    eval_result = quick_eval(
-        trainer.model,
-        tokenizer,
-        eval_samples,
-        cfg,
-        cfg.eval_episodes,
-        Path(output_dir) / f"eval_details_{mode}_trl.jsonl",
-    )
+    eval_result = None
+    if not getattr(cfg, "skip_final_eval", False):
+        eval_result = quick_eval(
+            trainer.model,
+            tokenizer,
+            eval_samples,
+            cfg,
+            cfg.eval_episodes,
+            Path(output_dir) / f"eval_details_{mode}_trl.jsonl",
+        )
     metrics = {
         "mode": mode,
-        "final_eval": [eval_result],
+        "final_eval": [] if eval_result is None else [eval_result],
         "trainer_log_history": trainer.state.log_history,
     }
     with open(Path(output_dir) / f"metrics_{mode}_trl.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
-    print(f"[EVAL] {eval_result}")
+    if eval_result is not None:
+        print(f"[EVAL] {eval_result}")
+    else:
+        print("[EVAL] skipped final eval; run --eval-only for formal metrics.")
     print(f"[DONE] saved to {output_dir}")
 
 
@@ -855,9 +869,45 @@ def main():
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--checkpoint-dir", default=None)
+    parser.add_argument("--eval-episodes", type=int, default=None)
+    parser.add_argument("--eval-pass-at-k", type=int, default=None)
+    parser.add_argument("--eval-batch-size", type=int, default=None)
+    parser.add_argument("--max-completion-length", type=int, default=None)
+    parser.add_argument("--num-generations", type=int, default=None)
+    parser.add_argument("--per-device-train-batch-size", type=int, default=None)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
+    parser.add_argument("--grpo-steps", type=int, default=None)
+    parser.add_argument("--logging-steps", type=int, default=None)
+    parser.add_argument("--save-steps", type=int, default=None)
+    parser.add_argument("--skip-final-eval", action="store_true")
+    parser.add_argument("--no-process-metrics", action="store_true")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    if args.eval_episodes is not None:
+        cfg.eval_episodes = args.eval_episodes
+    if args.eval_pass_at_k is not None:
+        cfg.eval_pass_at_k = args.eval_pass_at_k
+    if args.eval_batch_size is not None:
+        cfg.eval_batch_size = args.eval_batch_size
+    if args.max_completion_length is not None:
+        cfg.max_completion_length = args.max_completion_length
+    if args.num_generations is not None:
+        cfg.num_generations = args.num_generations
+    if args.per_device_train_batch_size is not None:
+        cfg.per_device_train_batch_size = args.per_device_train_batch_size
+    if args.gradient_accumulation_steps is not None:
+        cfg.grad_accum_steps = args.gradient_accumulation_steps
+    if args.grpo_steps is not None:
+        cfg.grpo_steps = args.grpo_steps
+    if args.logging_steps is not None:
+        cfg.log_steps = args.logging_steps
+    if args.save_steps is not None:
+        cfg.save_steps = args.save_steps
+    if args.skip_final_eval:
+        cfg.skip_final_eval = True
+    if args.no_process_metrics:
+        cfg.log_process_metrics = False
     if args.eval_only:
         eval_trl_checkpoint(cfg, args.mode, args.output_dir, args.checkpoint_dir)
     else:

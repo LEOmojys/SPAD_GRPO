@@ -33,5 +33,9 @@ Final Answer: \\boxed{74}"""
     assert sum(group[1].step_advantages) < 0
 
 
+def test_spad_logic():
+    main()
+
+
 if __name__ == "__main__":
     main()

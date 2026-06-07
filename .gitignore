@@ -35,7 +35,9 @@ models/**
 !Models/README.md
 checkpoints/
 outputs*/
-results/
+results/**
+!results/
+!results/README.md
 wandb/
 *.safetensors
 *.bin
@@ -46,7 +48,6 @@ wandb/
 
 # Local manuscripts and private notes
 *.docx
-GRPO_研究方案.md
 
 # OS files
 .DS_Store
