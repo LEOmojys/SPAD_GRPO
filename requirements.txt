@@ -1,0 +1,35 @@
+# SPAD/C-SPAD GRPO runtime dependencies.
+# Install PyTorch separately for your CUDA/CPU platform before this file.
+# Tested environments:
+# - Python 3.12, torch 2.6.0+cu124, CUDA 12.4, Windows
+# - Python 3.10, CUDA 13.0 driver, Linux server
+
+accelerate>=1.6,<2
+bitsandbytes>=0.49,<0.50
+datasets>=4.3,<5
+numpy>=2.0,<3
+peft>=0.19,<0.20
+PyYAML>=6.0,<7
+safetensors>=0.5,<0.6
+sentencepiece>=0.2,<0.3
+sympy>=1.13,<2
+tqdm>=4.67,<5
+transformers>=5.5,<5.6
+trl>=0.24,<0.25
+
+# Optional analysis packages. They are not required by the training scripts.
+# pandas>=2.2,<3; python_version < "3.11"
+# pandas>=3.0,<4; python_version >= "3.11"
+# scipy>=1.13,<2
+
+# Optional acceleration packages. Install only if compatible with your CUDA,
+# torch and platform. The project falls back to torch implementations without them.
+# causal-conv1d
+# flash-linear-attention
+# unsloth
+# unsloth_zoo
+
+# Optional TRL extras. The training script disables mergekit import paths, so
+# these are not required.
+# mergekit
+# llm-blender

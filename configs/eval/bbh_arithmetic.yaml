@@ -1,0 +1,34 @@
+# BBH multistep arithmetic evaluation config. Eval only; do not train on BBH.
+
+model:
+  name: "./Models/qwen3_5_2b"
+  max_seq_length: 1024
+  max_completion_length: 512
+  dtype: "bfloat16"
+  load_in_4bit: true
+  temperature: 0.1
+  top_p: 0.9
+
+lora:
+  r: 16
+  alpha: 32
+  target_modules: ["in_proj_qkv", "out_proj", "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  dropout: 0.05
+  bias: "none"
+
+data:
+  sft_file: "dataset/gsm8k/train.jsonl"
+  rl_file: "dataset/gsm8k/train.jsonl"
+  eval_file: "dataset/bbh/multistep_arithmetic_two.jsonl"
+  max_samples: 0
+  sft_samples: 0
+  rl_samples: 0
+  eval_samples: 0
+
+training:
+  seed: 42
+
+logging:
+  output_dir: "./results/eval/bbh_arithmetic"
+  eval_episodes: 0
+  run_name: "eval_bbh_arithmetic"

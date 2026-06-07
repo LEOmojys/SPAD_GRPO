@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local package caches
+.venv/
+.conda*/
+.conda_pkgs/
+env/
+venv/
+
+# IDE and local agent state
+.idea/
+.vscode/
+.omo/
+.agents/
+.codex/
+
+# Runtime caches
+.cache/
+unsloth_compiled_cache/
+*.log
+*.pid
+logs/
+
+# Large or generated ML artifacts
+Models/**
+models/**
+!Models/
+!Models/README.md
+checkpoints/
+outputs*/
+results/
+wandb/
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Local datasets. See README for expected layout.
+dataset/**
+!dataset/
+!dataset/README.md
+
+# Local manuscripts and private notes
+*.docx
+GRPO_研究方案.md
+
+# OS files
+.DS_Store
+Thumbs.db

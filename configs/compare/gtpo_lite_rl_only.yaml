@@ -1,0 +1,69 @@
+﻿# GTPO-lite comparison: entropy-weighted token credit without process signals.
+# Run: python grpo_spad_trl.py --config configs/compare/gtpo_lite_rl_only.yaml --mode baseline
+
+model:
+  name: "./Models/qwen3_5_2b"
+  max_seq_length: 1024
+  max_completion_length: 512
+  dtype: "bfloat16"
+  load_in_4bit: true
+  temperature: 0.7
+  top_p: 0.9
+
+lora:
+  r: 16
+  alpha: 32
+  target_modules: ["in_proj_qkv", "out_proj", "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  dropout: 0.05
+  bias: "none"
+
+data:
+  sft_file: "dataset/gsm8k/train.jsonl"
+  rl_file: "dataset/gsm8k/train.jsonl"
+  eval_file: "dataset/gsm8k/test.jsonl"
+  max_samples: 0
+  sft_samples: 0
+  rl_samples: 7473
+  eval_samples: 1319
+
+training:
+  sft_learning_rate: 2.0e-4
+  sft_steps: 0
+  sft_batch_size: 2
+  grpo_learning_rate: 1.0e-5
+  lr_scheduler_type: "cosine"
+  warmup_steps: 36
+  grpo_steps: 1200
+  num_generations: 8
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 4
+  steps_per_generation: 1
+  epsilon_clip: 0.2
+  beta_kl: 0.01
+  weight_decay: 0.01
+  loss_type: "grpo"
+  scale_rewards: "group"
+  entropy_advantage_weighting: true
+  entropy_weight_power: 1.0
+  entropy_weight_min: 0.5
+  entropy_weight_max: 2.0
+  seed: 42
+
+spad:
+  answer_reward: 1.0
+  wrong_reward: -0.5
+  format_reward: 0.05
+  consistency_reward_weight: 0.0
+  repetition_penalty_weight: 0.0
+  length_penalty_weight: 0.0
+  process_tau: 1.0
+  consistency_weight: 0.0
+  virtual_reward: 1.0
+  zero_advantage_fix: false
+
+logging:
+  output_dir: "./results/compare/gtpo_lite_rl_only"
+  logging_steps: 10
+  save_steps: 200
+  eval_episodes: 200
+  run_name: "compare_gtpo_lite_rl_only"

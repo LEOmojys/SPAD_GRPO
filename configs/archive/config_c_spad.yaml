@@ -1,0 +1,61 @@
+# C-SPAD-GRPO configuration for Chapter 4.
+# Run: python grpo_spad.py --config config_c_spad.yaml --mode c_spad
+
+model:
+  name: "./Models/qwen3_5_2b"
+  max_seq_length: 512
+  max_completion_length: 192
+  dtype: "bfloat16"
+  load_in_4bit: true
+  temperature: 0.7
+  top_p: 0.9
+
+lora:
+  r: 16
+  alpha: 32
+  target_modules: ["in_proj_qkv", "out_proj", "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  dropout: 0.05
+  bias: "none"
+
+data:
+  file: "gsm8k_easy.json"
+  max_samples: 500
+  sft_samples: 200
+  rl_samples: 250
+  eval_samples: 50
+
+training:
+  sft_learning_rate: 2.0e-4
+  sft_steps: 100
+  sft_batch_size: 2
+  grpo_learning_rate: 5.0e-5
+  grpo_steps: 100
+  num_generations: 4
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  epsilon_clip: 0.2
+  beta_kl: 0.01
+  weight_decay: 0.01
+  seed: 42
+
+spad:
+  answer_reward: 1.0
+  wrong_reward: -0.5
+  format_reward: 0.05
+  consistency_reward_weight: 0.06
+  repetition_penalty_weight: 0.03
+  length_penalty_weight: 0.002
+  process_tau: 0.55
+  positive_score_threshold: 1.2
+  negative_score_threshold: 0.8
+  min_step_weight: 0.0
+  consistency_weight: 0.35
+  virtual_reward: 1.0
+  zero_advantage_fix: true
+
+logging:
+  output_dir: "./outputs_c_spad_balanced"
+  logging_steps: 10
+  save_steps: 100
+  eval_episodes: 50
+  run_name: "c_spad_grpo_gsm8k_balanced"
