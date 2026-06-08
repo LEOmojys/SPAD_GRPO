@@ -39,6 +39,17 @@ Use eval configs for fair cross-dataset checkpoint evaluation. They use
 deterministic generation, longer evaluation context/completion budgets, and
 `eval_episodes: 0` for full-set evaluation. BBH is eval-only.
 
+Formal SPAD and C-SPAD configs enable a small length regularizer by default:
+
+```yaml
+length_penalty_weight: 0.003
+positive_length_tiebreak: true
+```
+
+This regularizer applies only to SPAD-family modes, not to the CoT-GRPO
+baseline. It is intended to control redundant reasoning and should be reported
+as part of the method configuration.
+
 Formal training command:
 
 ```powershell

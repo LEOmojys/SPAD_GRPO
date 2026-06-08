@@ -1,4 +1,4 @@
-﻿# Formal RL-only SPAD-GRPO.
+# Formal RL-only SPAD-GRPO.
 # Run: python grpo_spad_trl.py --config configs/formal/spad_rl_only.yaml --mode spad
 
 model:
@@ -49,7 +49,7 @@ spad:
   format_reward: 0.03
   consistency_reward_weight: 0.0
   repetition_penalty_weight: 0.0
-  length_penalty_weight: 0.0
+  length_penalty_weight: 0.003
   process_tau: 0.9
   positive_score_threshold: 0.9
   negative_score_threshold: 0.9
@@ -57,7 +57,7 @@ spad:
   consistency_weight: 0.0
   virtual_reward: 1.0
   zero_advantage_fix: true
-  positive_length_tiebreak: false
+  positive_length_tiebreak: true
   normalize_token_advantage: true
   max_token_advantage_scale: 5.0
 

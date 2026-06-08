@@ -430,11 +430,12 @@ def score_completion(tokenizer, prompt: str, completion: str, sample: MathSample
     metrics = process_metrics_dict(analysis)
     token_count = len(tokenizer(text=completion, add_special_tokens=False).input_ids)
     adjusted_reward = reward
+    if mode != "baseline":
+        adjusted_reward -= cfg.length_penalty_weight * max(0, token_count - cfg.max_completion_length * 0.75)
     if mode == "c_spad":
         adjusted_reward += cfg.consistency_reward_weight * analysis.step_consistency_rate
         adjusted_reward += cfg.consistency_reward_weight * analysis.final_process_consistency
         adjusted_reward -= cfg.repetition_penalty_weight * analysis.repetition_rate
-        adjusted_reward -= cfg.length_penalty_weight * max(0, token_count - cfg.max_completion_length * 0.75)
     process_scores = [
         s.score + (cfg.consistency_weight * s.consistency if mode == "c_spad" else 0.0)
         for s in analysis.steps

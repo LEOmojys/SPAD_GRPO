@@ -265,9 +265,12 @@ metrics.
 
 SPAD decomposes a sequence-level GRPO advantage into step-level token weights.
 For positive advantages, higher-scoring reasoning steps receive more weight.
-For negative advantages, lower-quality steps receive more penalty. C-SPAD adds
-process-consistency shaping to discourage repeated, contradictory, or internally
-inconsistent reasoning.
+For negative advantages, lower-quality steps receive more penalty. SPAD-family
+configs also use a small length regularizer by default
+(`length_penalty_weight: 0.003`) plus positive length tie-breaking, so methods
+are encouraged to reduce redundant reasoning without changing the baseline
+GRPO reward. C-SPAD adds process-consistency shaping to discourage repeated,
+contradictory, or internally inconsistent reasoning.
 
 This project does not claim to fully reproduce DAPO, GTPO, or other large-scale
 RL recipes. Configs under `configs/compare/` are controlled lightweight

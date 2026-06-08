@@ -426,14 +426,15 @@ class SPADGRPOTrainer(GRPOTrainer):
                 metric_sums[k] = metric_sums.get(k, 0.0) + float(v)
 
             adjustment = 0.0
-            if self.spad_mode == "c_spad":
+            if self.spad_mode != "baseline":
                 token_count = len(self.processing_class(text=completion, add_special_tokens=False).input_ids)
-                adjustment += self.spad_cfg.consistency_reward_weight * analysis.step_consistency_rate
-                adjustment += self.spad_cfg.consistency_reward_weight * analysis.final_process_consistency
-                adjustment -= self.spad_cfg.repetition_penalty_weight * analysis.repetition_rate
                 adjustment -= self.spad_cfg.length_penalty_weight * max(
                     0, token_count - self.spad_cfg.max_completion_length * 0.75
                 )
+            if self.spad_mode == "c_spad":
+                adjustment += self.spad_cfg.consistency_reward_weight * analysis.step_consistency_rate
+                adjustment += self.spad_cfg.consistency_reward_weight * analysis.final_process_consistency
+                adjustment -= self.spad_cfg.repetition_penalty_weight * analysis.repetition_rate
 
             scores = [
                 s.score + (self.spad_cfg.consistency_weight * s.consistency if self.spad_mode == "c_spad" else 0.0)
