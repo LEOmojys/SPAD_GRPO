@@ -65,5 +65,6 @@ logging:
   output_dir: "./results/formal/spad_rl_only_unsloth_fast"
   logging_steps: 5
   save_steps: 25
-  eval_episodes: 50
+  eval_episodes: 1319
   run_name: "formal_spad_grpo_rl_only_unsloth_fast"
+

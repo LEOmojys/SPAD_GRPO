@@ -688,6 +688,11 @@ def _decode_sampled_completions(
     return decoded
 
 
+def _prepare_generation_inputs(inputs: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
+    allowed_keys = {"input_ids", "attention_mask", "token_type_ids"}
+    return {k: v.to(device) for k, v in inputs.items() if k in allowed_keys}
+
+
 def _decode_batch_outputs(
     model,
     tokenizer,
@@ -729,7 +734,7 @@ def _decode_batch_outputs(
         )
     finally:
         tokenizer.padding_side = old_padding_side
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    inputs = _prepare_generation_inputs(inputs, model.device)
     input_width = inputs["input_ids"].shape[1]
     with torch.inference_mode():
         with autocast_context():
