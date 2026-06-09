@@ -66,4 +66,5 @@ logging:
   logging_steps: 10
   save_steps: 50
   eval_episodes: 50
+  eval_batch_size: 4
   run_name: "formal_c_spad_grpo_rl_only"

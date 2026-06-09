@@ -1,4 +1,4 @@
-﻿# Formal RL-only CoT-GRPO baseline.
+# Formal RL-only CoT-GRPO baseline.
 # Run: python grpo_spad_trl.py --config configs/formal/cot_baseline_rl_only.yaml --mode baseline
 
 model:
@@ -60,4 +60,5 @@ logging:
   logging_steps: 10
   save_steps: 50
   eval_episodes: 50
+  eval_batch_size: 4
   run_name: "formal_cot_grpo_baseline_rl_only"

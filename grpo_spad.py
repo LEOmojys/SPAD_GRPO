@@ -113,7 +113,7 @@ class SPADConfig:
 
     eval_episodes: int = 50
     eval_pass_at_k: int = 8
-    eval_batch_size: int = 1
+    eval_batch_size: int = 4
     eval_sample_temperature: float = 1.0
     eval_sample_top_p: float = 0.9
     skip_final_eval: bool = False
@@ -311,6 +311,8 @@ def format_prompt(tokenizer, question: str, dataset_type: str = "gsm8k") -> str:
         system = (
             "Solve the multiple-choice math problem step by step.\n"
             "Use concise, numbered steps.\n"
+            "Step 1 must identify the target quantity and the relevant given quantities.\n"
+            "Do not introduce quantities that are not asked for.\n"
             "End with exactly one line: Final Answer: \\boxed{A}.\n"
             "Use only the correct option letter inside the box.\n"
             "Do not use tools or JSON."
@@ -319,6 +321,7 @@ def format_prompt(tokenizer, question: str, dataset_type: str = "gsm8k") -> str:
         system = (
             "Evaluate the arithmetic expression step by step.\n"
             "Use concise, numbered steps.\n"
+            "Step 1 must identify the target expression and the required operation order.\n"
             "End with exactly one line: Final Answer: \\boxed{number}.\n"
             "Do not use tools or JSON."
         )
@@ -326,6 +329,8 @@ def format_prompt(tokenizer, question: str, dataset_type: str = "gsm8k") -> str:
         system = (
             "Solve the math problem step by step.\n"
             "Use concise, numbered steps.\n"
+            "Step 1 must identify the target quantity and the relevant given quantities.\n"
+            "Do not introduce quantities that are not asked for.\n"
             "End with exactly one line: Final Answer: \\boxed{answer}.\n"
             "Do not use tools or JSON."
         )

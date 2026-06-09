@@ -216,8 +216,18 @@ metrics_<mode>_unsloth_eval.json
 eval_details_<mode>_unsloth.jsonl
 ```
 
+Post-training and eval-only runs default to batched evaluation with
+`eval_batch_size=4`. Override it with `--eval-batch-size` when needed.
+
 The JSONL details file contains per-problem completions, extracted answers,
 correctness flags, token counts, format checks, and truncation flags.
+
+To summarize error causes from an eval details file:
+
+```powershell
+python scripts\analyze_eval_errors.py `
+  results\formal\c_spad_rl_only_unsloth_fast_unsloth\eval_details_c_spad_unsloth.jsonl
+```
 
 ## Metrics
 

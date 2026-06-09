@@ -60,5 +60,6 @@ logging:
   logging_steps: 5
   save_steps: 25
   eval_episodes: 1319
+  eval_batch_size: 4
   run_name: "formal_cot_grpo_baseline_rl_only_unsloth_fast"
 

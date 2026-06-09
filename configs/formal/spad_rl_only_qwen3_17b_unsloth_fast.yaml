@@ -66,4 +66,5 @@ logging:
   logging_steps: 2
   save_steps: 20
   eval_episodes: 20
+  eval_batch_size: 4
   run_name: "formal_spad_grpo_rl_only_qwen3_17b_unsloth_fast"

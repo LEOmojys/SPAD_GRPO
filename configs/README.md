@@ -39,6 +39,15 @@ Use eval configs for fair cross-dataset checkpoint evaluation. They use
 deterministic generation, longer evaluation context/completion budgets, and
 `eval_episodes: 0` for full-set evaluation. BBH is eval-only.
 
+Evaluation uses batched generation by default:
+
+```yaml
+eval_batch_size: 4
+```
+
+Use `--eval-batch-size` to lower it if VRAM is insufficient or raise it if the
+GPU has headroom.
+
 Formal SPAD and C-SPAD configs enable a small length regularizer by default:
 
 ```yaml
